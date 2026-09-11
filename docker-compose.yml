@@ -1,0 +1,21 @@
+services:
+  auction-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: live-auction-floor:latest
+    container_name: live-auction-floor
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      BASIC_AUTH_ENABLED: "true"
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-admin}
+      BASIC_AUTH_PASS: ${BASIC_AUTH_PASS:-change-me}
+    volumes:
+      - auction_data:/app/server/data
+    restart: unless-stopped
+
+volumes:
+  auction_data:
