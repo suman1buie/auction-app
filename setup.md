@@ -1,62 +1,119 @@
-cat > ubuntu-hosting-complete-guide.md <<'EOF'
-# Ubuntu Hosting Guide For Live Auction App
+cat > [setup.md](http://_vscodecontentref_/1) <<'EOF'
+# Ubuntu Hosting Guide For Live Auction App (No Docker)
 
-This guide is command-first and end-to-end for hosting on one Ubuntu laptop with Docker, Caddy reverse proxy, and public access through router forwarding.
+This guide runs the app directly on Ubuntu using Node.js, systemd, and Caddy.
+It also includes a no-domain path.
 
-## 1) Update system and install base tools
+## 1) Update system and install base packages
 
 Run:
     sudo apt update
     sudo apt upgrade -y
     sudo apt install -y curl ca-certificates gnupg lsb-release git ufw
 
-## 2) Install Docker and Docker Compose plugin
+## 2) Install Node.js (system-wide)
 
 Run:
-    curl -fsSL https://get.docker.com | sh
-    sudo usermod -aG docker $USER
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt install -y nodejs
 
-Log out and log in again, then verify:
-    docker --version
-    docker compose version
+Verify:
+    node -v
+    npm -v
+    which node
 
-## 3) Go to your project folder
+## 3) Go to project directory and install dependencies
 
-If you already have the project:
+If project is already present:
     cd /path/to/chat-app
 
-If you need to clone:
+If cloning:
     git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
     cd YOUR_REPO
 
-## 4) Create production environment files
+Install:
+    npm ci
 
-Create app auth credentials:
-    cat > .env <<'EOT'
-    BASIC_AUTH_USER=your_admin_user
-    BASIC_AUTH_PASS=change_this_to_a_strong_password
-    EOT
+## 4) Create frontend build env
 
-Create frontend runtime URL setting:
+Create:
     cat > .env.production <<'EOT'
     VITE_SERVER_URL=/
     EOT
 
-## 5) Build and start with Docker Compose
+Why:
+- Slash means same-origin.
+- Frontend and backend stay on same host URL.
+
+## 5) Create runtime server env (used by systemd)
+
+Create:
+    sudo tee /etc/live-auction-floor.env > /dev/null <<'EOT'
+    NODE_ENV=production
+    PORT=3001
+    BASIC_AUTH_ENABLED=true
+    BASIC_AUTH_USER=your_admin_user
+    BASIC_AUTH_PASS=change_this_to_a_strong_password
+    EOT
+
+Secure file:
+    sudo chmod 600 /etc/live-auction-floor.env
+
+## 6) Build frontend
 
 Run:
-    docker compose up -d --build
+    npm run build
 
-Check status:
-    docker compose ps
+This creates dist, and server serves it from [server/index.js](http://_vscodecontentref_/2).
 
-Check logs:
-    docker logs -f live-auction-floor
+## 7) Quick local run test
 
-Local health test:
+Run:
+    set -a
+    source /etc/live-auction-floor.env
+    set +a
+    node [index.js](http://_vscodecontentref_/3)
+
+In another terminal:
     curl http://127.0.0.1:3001/health
 
-## 6) Install Caddy reverse proxy (HTTPS on 80/443)
+Stop with Ctrl+C after test.
+
+## 8) Create systemd service
+
+Set helper variables:
+    APP_DIR="$(pwd)"
+    APP_USER="$(whoami)"
+
+Create service:
+    sudo tee /etc/systemd/system/live-auction-floor.service > /dev/null <<EOT
+    [Unit]
+    Description=Live Auction Floor
+    After=network.target
+    
+    [Service]
+    Type=simple
+    WorkingDirectory=$APP_DIR
+    EnvironmentFile=/etc/live-auction-floor.env
+    ExecStart=$(which node) [index.js](http://_vscodecontentref_/4)
+    Restart=always
+    RestartSec=3
+    User=$APP_USER
+    Group=$APP_USER
+    
+    [Install]
+    WantedBy=multi-user.target
+    EOT
+
+Enable and start:
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now live-auction-floor
+
+Verify:
+    sudo systemctl status live-auction-floor --no-pager
+    journalctl -u live-auction-floor -n 100 --no-pager
+
+## 9) Install Caddy reverse proxy
 
 Run:
     sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
@@ -65,27 +122,41 @@ Run:
     sudo apt update
     sudo apt install -y caddy
 
-## 7) Configure Caddy
+## 10) Caddy config
 
-Important:
-- Use a hostname, not just raw IP, for automatic HTTPS certificates.
-- If you do not own a domain, create a free hostname from DuckDNS or No-IP first.
+Option A: You have hostname or DDNS hostname
 
-Replace YOUR_HOSTNAME with your hostname and run:
+Replace YOUR_HOSTNAME:
     sudo tee /etc/caddy/Caddyfile > /dev/null <<'EOT'
     YOUR_HOSTNAME {
       reverse_proxy 127.0.0.1:3001
     }
     EOT
 
-Reload Caddy:
+Apply:
     sudo systemctl reload caddy
     sudo systemctl status caddy --no-pager
 
 Test:
     curl https://YOUR_HOSTNAME/health
 
-## 8) Open Ubuntu firewall
+Option B: No domain and no hostname
+
+HTTP only on port 80:
+    sudo tee /etc/caddy/Caddyfile > /dev/null <<'EOT'
+    :80 {
+      reverse_proxy 127.0.0.1:3001
+    }
+    EOT
+
+Apply:
+    sudo systemctl reload caddy
+
+Note:
+- Voice/microphone works best on HTTPS.
+- If you have no domain, use Cloudflare Tunnel for HTTPS URL.
+
+## 11) Open Ubuntu firewall
 
 Run:
     sudo ufw allow OpenSSH
@@ -94,7 +165,7 @@ Run:
     sudo ufw enable
     sudo ufw status
 
-## 9) Get LAN details needed for router setup
+## 12) Get LAN details for router forwarding
 
 Run:
     IFACE=$(ip route get 1.1.1.1 | awk '{print $5; exit}')
@@ -104,70 +175,60 @@ Run:
     ip route | awk '/default/ {print "Gateway:", $3}'
     curl -4 ifconfig.me ; echo
 
-You will use:
-- Local LAN IP (example 192.168.1.50)
-- MAC address
-- Gateway/router IP
-- Public IP
+## 13) Router settings (manual in router UI)
 
-## 10) Router configuration (manual in router web page)
+Configure:
+- DHCP reservation for your laptop MAC to fixed LAN IP (example 192.168.1.50)
+- Port forward external 80 to 192.168.1.50:80
+- Port forward external 443 to 192.168.1.50:443
 
-You must do this in router admin panel:
-- DHCP reservation:
-  bind your laptop MAC to a fixed LAN IP (example 192.168.1.50)
-- Port forwarding:
-  external 80  -> 192.168.1.50:80
-  external 443 -> 192.168.1.50:443
+## 14) Verify external reachability
 
-## 11) Verify from outside your home network
+From phone mobile data:
+- Open health URL first.
+- Then open app URL.
 
-Use a phone on mobile data (Wi-Fi off):
-- Open:
-  https://YOUR_HOSTNAME/health
-- Then open:
-  https://YOUR_HOSTNAME
+## 15) No-domain HTTPS alternative (recommended)
 
-## 12) Daily operation commands
+Install cloudflared:
+    wget -O /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+    sudo dpkg -i /tmp/cloudflared.deb
 
-Start stack:
-    docker compose up -d
+Start tunnel:
+    cloudflared tunnel --url http://localhost:3001
 
-Stop stack:
-    docker compose down
+Use the generated https URL.
 
-Rebuild after code update:
+## 16) Daily operation
+
+Start service:
+    sudo systemctl start live-auction-floor
+
+Stop service:
+    sudo systemctl stop live-auction-floor
+
+Restart service:
+    sudo systemctl restart live-auction-floor
+
+Service status:
+    sudo systemctl status live-auction-floor --no-pager
+
+App logs:
+    journalctl -u live-auction-floor -f
+
+After code update:
     git pull
-    docker compose up -d --build
+    npm ci
+    npm run build
+    sudo systemctl restart live-auction-floor
 
-View logs:
-    docker logs -f live-auction-floor
+## 17) Optional backup
 
-Check listening ports:
-    sudo ss -tulpen | grep -E ':80|:443|:3001'
+Backup SQLite file:
+    cp server/data/auction.sqlite "$HOME/auction_$(date +%F).sqlite"
 
-## 13) Troubleshooting commands
-
-Check Docker services:
-    docker compose ps
-
-Check Caddy:
-    sudo systemctl status caddy --no-pager
-    sudo journalctl -u caddy -n 100 --no-pager
-
-Check firewall:
-    sudo ufw status
-
-Check public IP:
-    curl -4 ifconfig.me ; echo
-
-## 14) Optional: backup SQLite Docker volume
-
-Run from project directory:
-    docker run --rm -v auction_data:/data -v "$(pwd)":/backup alpine sh -c "tar czf /backup/auction_data_$(date +%F).tgz -C /data ."
-
-## Notes
-
-- Keep laptop plugged in and disable sleep.
-- Keep one app instance only.
-- Use strong BASIC_AUTH credentials.
+Notes:
+- Keep laptop plugged in and sleep disabled.
+- Keep strong BASIC_AUTH credentials.
+- Keep VITE_SERVER_URL as slash for same-origin routing.
 EOF
