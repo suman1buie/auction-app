@@ -1,4 +1,3 @@
-cat > [setup.md](http://_vscodecontentref_/1) <<'EOF'
 # Ubuntu Hosting Guide For Live Auction App (No Docker)
 
 This guide runs the app directly on Ubuntu using Node.js, systemd, and Caddy.
@@ -64,15 +63,15 @@ Secure file:
 Run:
     npm run build
 
-This creates dist, and server serves it from [server/index.js](http://_vscodecontentref_/2).
+This creates dist, and server serves it from server/index.js.
 
 ## 7) Quick local run test
 
 Run:
     set -a
-    source /etc/live-auction-floor.env
+    source <(sudo cat /etc/live-auction-floor.env)
     set +a
-    node [index.js](http://_vscodecontentref_/3)
+    node server/index.js
 
 In another terminal:
     curl http://127.0.0.1:3001/health
@@ -84,6 +83,7 @@ Stop with Ctrl+C after test.
 Set helper variables:
     APP_DIR="$(pwd)"
     APP_USER="$(whoami)"
+    NODE_BIN="$(command -v node)"
 
 Create service:
     sudo tee /etc/systemd/system/live-auction-floor.service > /dev/null <<EOT
@@ -95,7 +95,7 @@ Create service:
     Type=simple
     WorkingDirectory=$APP_DIR
     EnvironmentFile=/etc/live-auction-floor.env
-    ExecStart=$(which node) [index.js](http://_vscodecontentref_/4)
+    ExecStart=$NODE_BIN server/index.js
     Restart=always
     RestartSec=3
     User=$APP_USER
@@ -231,4 +231,3 @@ Notes:
 - Keep laptop plugged in and sleep disabled.
 - Keep strong BASIC_AUTH credentials.
 - Keep VITE_SERVER_URL as slash for same-origin routing.
-EOF
